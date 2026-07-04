@@ -160,6 +160,46 @@ handles-negative-inverse-bind-translation`); `kotoba-lang/vrm`'s full test
 suite (39 tests / 149 assertions) passes after the fix. This benefits every
 consumer of `vrm.humanoid/to-kami-skeleton`, not just this repo.
 
+## Second rig stage: UniRig via `cloud-murakumo`'s `:autorig` (ADR-0048 §2)
+
+ADR-0048 §2 adds a real, GPU-inference auto-rigger (**UniRig**, arXiv:2504.12451,
+`VAST-AI/UniRig`) alongside the bbox heuristic above — as an **ensemble/cross-
+check, not a replacement**. `cloud-murakumo` gained a new `:autorig` `:gen`
+function (`:fn/engine :unirig`, `:gpu/class :l4` — much lighter than
+`:model3d`'s `:a100-80`, since auto-rigging has no diffusion/rendering stage)
+that `kami.gen.ml3d/auto-rig-via-unirig` submits to via the exact same
+`cloud-murakumo.gen/job` + `cloud-murakumo.worker/run-job` + injected
+`:execute` pattern as `generate-from-image`'s own `:model3d` call:
+
+```
+{:mesh-path :model :params}
+  -> cloud-murakumo.gen/job            (build+validate the :autorig :gen.job)
+  -> cloud-murakumo.worker/run-job     (injected :execute -- mock or real)
+  -> vrm.parse/parse-vrm               (round-trip validation)
+```
+
+`kami.gen.ml3d/generate-from-image-with-rig-choice` wraps the full pipeline
+with a `:rig-strategy` (`:heuristic` (default, unchanged behavior) |
+`:unirig` | `:both`). `:both` runs BOTH riggers against the same downloaded
+mesh and returns a `compare-rigs` report (bone count + a coarse "does the
+joint-name set look like a plausible humanoid" check against VRM 1.0's 15
+required bones) — intentionally simple, not a scoring system, matching 2026
+head-to-head auto-rig benchmarks (StraySpark) finding even best-in-class
+riggers need human cleanup. It never silently swaps the primary `:vrm` result
+for UniRig's without the caller asking for `:unirig`/`:both`.
+
+Same fail-closed mock/real split as `:model3d`: **`mock-execute-autorig`**
+(tested, used by this repo) ignores the invocation and reruns
+`kami.gen.ml3d.rig/auto-rig-glb` against a fresh fixture mesh with
+`rig/unirig-mock-bone-plan` — a deliberately different bone plan (adds the
+optional `upperChest` bone, 20 bones vs the default plan's 19) so the `:both`
+ensemble test has two genuinely different rigs to compare, not two identical
+outputs from the same call. **This is not a real UniRig result** — no live
+UniRig backend exists in this dev environment, and ADR-0048 does not
+authorize spending on one. **`real-execute-autorig`** is real, correctly
+wired code that will fail loudly without a configured backend, same as
+`real-execute`; it has never been run against a live UniRig endpoint.
+
 ## CID / Asset Hub publish
 
 `kami.gen.ml3d/->asset` reuses the exact `content-cid` sha256 convention from
@@ -175,5 +215,5 @@ repos', and shapes the result per `gftdcojp/network-isekai`'s
 clojure -M:test
 ```
 
-10 tests / 47 assertions, all against `mock-execute` — no network, no GPU,
-no cost.
+19 tests / 94 assertions, all against `mock-execute`/`mock-execute-autorig` —
+no network, no GPU, no cost.

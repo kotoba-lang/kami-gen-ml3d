@@ -113,3 +113,104 @@
 (deftest generate-from-image-requires-execute
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires :execute"
                         (ml3d/generate-from-image {:image-path "/tmp/x.png"} {}))))
+
+;; ── ADR-0048 §2 -- UniRig (:autorig) ensemble/fallback ─────────────────────
+
+(deftest autorig-fn-matches-cloud-murakumo-spec
+  (testing "the real :autorig function from cloud-murakumo's murakumo.edn, not a copy"
+    (let [f (ml3d/autorig-fn)]
+      (is (= :autorig (:fn/id f)))
+      (is (= :gen (:fn/kind f)))
+      (is (= :unirig (:fn/engine f)))
+      (is (= :rig (:fn/modality f)))
+      (is (= :l4 (:gpu/class f)))
+      (is (= #{"unirig"} (set (keys (get-in f [:gen :models])))))
+      (is (= [:vrm] (get-in f [:gen :out]))))))
+
+(deftest build-autorig-job-normalizes-per-cloud-murakumo-gen
+  (let [job (ml3d/build-autorig-job {:mesh-path "/tmp/mesh.glb" :model "unirig" :params {}}
+                                    {:account "test/demo"})]
+    (is (= :rig (:gen.job/modality job)))
+    (is (= :unirig (:gen.job/engine job)))
+    (is (= :autorig (:gen.job/fn job)))
+    (is (= "unirig" (:gen.job/model job)))
+    (is (= :queued (:gen.job/status job)))
+    (is (= ["/tmp/mesh.glb"] (get-in job [:gen.job/input :refs])))))
+
+(deftest mock-execute-autorig-returns-a-fixture-vrm
+  (let [{:keys [outputs gpu-seconds]} (ml3d/mock-execute-autorig {:via :proc :backend {:runtime "UniRig"}})]
+    (is (= 1 (count outputs)))
+    (is (.exists (io/file (first outputs))))
+    (is (pos? gpu-seconds))
+    (testing "it's a real, valid VRM 1.0 file, structurally different from the heuristic's own default rig"
+      (let [raw (vec (map #(bit-and (int %) 0xFF) (.readAllBytes (io/input-stream (first outputs)))))
+            doc (vrm/parse-vrm raw)]
+        (is (= :v1-0 (:version doc)))
+        (is (= 20 (count (:human-bones (:humanoid doc)))))
+        (is (contains? (set (map :bone (:human-bones (:humanoid doc)))) :upper-chest))))))
+
+(deftest real-execute-autorig-fails-closed-without-backend
+  (testing "matches cloud-murakumo's own default-execute fail-closed contract, through this wrapper"
+    (with-redefs [worker/getenv (fn [_] nil)]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"no live cloud-murakumo backend configured"
+                            (ml3d/real-execute-autorig {:via :proc :backend {:runtime "UniRig"}}))))))
+
+(deftest auto-rig-via-unirig-end-to-end-against-mock-executor
+  (testing "full :autorig pipeline: job -> run -> vrm, against the mock executor"
+    (let [mesh-path (fixture/write-glb-file!)
+          result (ml3d/auto-rig-via-unirig {:mesh-path mesh-path :model "unirig"}
+                                           {:execute ml3d/mock-execute-autorig})]
+      (is (= :unirig (get-in result [:gen.job :gen.job/engine])))
+      (is (= "unirig" (get-in result [:gen.job :gen.job/model])))
+      (is (= :done (:murakumo.run/state (:run result))))
+      (is (.exists (io/file (get-in result [:vrm :path]))))
+      (is (= 20 (count (:human-bones (:humanoid (get-in result [:vrm :document])))))))))
+
+(deftest generate-from-image-with-rig-choice-defaults-to-heuristic-only
+  (testing ":rig-strategy omitted -- byte-for-byte the same rig stage generate-from-image runs"
+    (let [result (ml3d/generate-from-image-with-rig-choice
+                  {:image-path "/tmp/reference-photo.png" :model "trellis"}
+                  {:execute ml3d/mock-execute})]
+      (is (contains? result :heuristic))
+      (is (not (contains? result :unirig)))
+      (is (not (contains? result :comparison)))
+      (is (= (:vrm result) (:heuristic result)))
+      (is (= 19 (count (:human-bones (:humanoid (:document (:vrm result))))))))))
+
+(deftest generate-from-image-with-rig-choice-unirig-only
+  (let [result (ml3d/generate-from-image-with-rig-choice
+                {:image-path "/tmp/reference-photo.png" :model "trellis" :rig-strategy :unirig}
+                {:execute ml3d/mock-execute :rig-execute ml3d/mock-execute-autorig})]
+    (is (not (contains? result :heuristic)))
+    (is (contains? result :unirig))
+    (is (= (:vrm result) (:unirig result)))
+    (is (= 20 (count (:human-bones (:humanoid (:document (:vrm result)))))))))
+
+(deftest generate-from-image-with-rig-choice-requires-rig-execute-for-unirig
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires :rig-execute"
+                        (ml3d/generate-from-image-with-rig-choice
+                         {:image-path "/tmp/x.png" :rig-strategy :unirig}
+                         {:execute ml3d/mock-execute}))))
+
+(deftest generate-from-image-with-rig-choice-both-runs-both-and-compares
+  (testing "ADR-0048 §2 ensemble: :both runs the heuristic AND UniRig, reports a simple comparison, picks neither silently"
+    (let [result (ml3d/generate-from-image-with-rig-choice
+                  {:image-path "/tmp/reference-photo.png" :model "trellis" :rig-strategy :both}
+                  {:execute ml3d/mock-execute :rig-execute ml3d/mock-execute-autorig})]
+      (testing "both riggers actually ran"
+        (is (contains? result :heuristic))
+        (is (contains? result :unirig))
+        (is (.exists (io/file (get-in result [:heuristic :path]))))
+        (is (.exists (io/file (get-in result [:unirig :path]))))
+        (is (= 19 (count (:human-bones (:humanoid (:document (:heuristic result)))))))
+        (is (= 20 (count (:human-bones (:humanoid (:document (:unirig result))))))))
+      (testing "primary :vrm defaults to the heuristic's result, not silently swapped for UniRig's"
+        (is (= (:vrm result) (:heuristic result))))
+      (testing "comparison report is simple, not a scoring system"
+        (let [cmp (:comparison result)]
+          (is (= 19 (get-in cmp [:heuristic :bone-count])))
+          (is (= 20 (get-in cmp [:unirig :bone-count])))
+          (is (= 1 (:bone-count-diff cmp)))
+          (is (false? (:agree-on-bone-count? cmp)))
+          (is (true? (:both-plausible-humanoid? cmp))))))))
