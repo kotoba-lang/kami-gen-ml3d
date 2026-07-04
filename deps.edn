@@ -1,0 +1,21 @@
+;; kami-gen-ml3d — ADR-2607051120. JVM-only (executor/rig do real IO: files,
+;; ProcessBuilder-adjacent GPU backend calls), like cloud-murakumo's own
+;; `cloud_murakumo.executor` (`.clj`, not `.cljc`).
+;;
+;; :local/root deps (not Maven coords) — same convention as this org's actor
+;; repos (CLAUDE.md "Actors" section: langgraph-clj override). tools.deps
+;; pulls each dependency's own `:paths` onto our classpath, so
+;; `cloud-murakumo.spec/load-spec` resolves `resources/murakumo.edn` as a
+;; classpath resource transitively through the cloud-murakumo dependency —
+;; see README "cloud-murakumo dependency" for why this is a live dependency,
+;; not a copied EDN slice.
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+        io.github.gftdcojp/cloud-murakumo {:local/root "../../gftdcojp/cloud-murakumo"}
+        io.github.kotoba-lang/vrm         {:local/root "../vrm"}
+        io.github.kotoba-lang/skeleton    {:local/root "../skeleton"}}
+ :aliases
+ {:test {:extra-paths ["test"]
+         :extra-deps  {io.github.cognitect-labs/test-runner
+                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+         :main-opts   ["-m" "cognitect.test-runner"]}}}
