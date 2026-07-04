@@ -124,6 +124,21 @@
    ["rightLowerLeg" "rightUpperLeg"  0.28 -0.15 0.0]
    ["rightFoot"     "rightLowerLeg"  0.05 -0.15 0.0]])
 
+;; ADR-0048 §2 -- a second, deliberately-different bone plan used ONLY as a
+;; mock stand-in for "what a different auto-rigger (UniRig) might produce",
+;; NOT derived from any real UniRig output (no live backend exists in this
+;; dev environment -- see kami.gen.ml3d's namespace docstring). Adds the
+;; optional `upperChest` bone (VRM 1.0 spec, `vrm.vrm-types/human-bone-table`)
+;; between chest/neck, giving `kami.gen.ml3d/generate-from-image-with-rig-
+;; choice`'s ensemble comparison a genuinely different bone count/set to
+;; report on when run against this module's own default `bone-plan`, instead
+;; of two calls into the same code producing byte-identical output.
+(def unirig-mock-bone-plan
+  (vec (concat (take 3 bone-plan) ; hips spine chest
+               [["upperChest" "chest" 0.78 0.00 0.0]]
+               [(assoc (nth bone-plan 3) 1 "upperChest")] ; neck, reparented
+               (drop 4 bone-plan))))
+
 (defn- world-position [bbox [_ _ hfrac xfrac zfrac]]
   (let [[minx miny minz] (:min bbox) [maxx maxy maxz] (:max bbox)
         cx (/ (+ minx maxx) 2.0) cz (/ (+ minz maxz) 2.0)
@@ -133,25 +148,32 @@
     [(+ cx (* xfrac halfw)) (+ miny (* hfrac height)) (+ cz (* zfrac halfd))]))
 
 (defn build-skeleton
-  "bbox -> `{:sk <skeleton.cljc Skeleton> :names [wire-name ...] :name->index
-  {...}}`. Bones carry identity rotation/unit scale throughout -- this
-  heuristic only ever places joints, it never orients them -- which lets the
-  inverse-bind-matrix step below skip a general Mat4 inverse (see
-  `inverse-bind-of`)."
-  [bbox]
-  (let [names (mapv first bone-plan)
-        name->index (into {} (map-indexed (fn [i n] [n i]) names))
-        worlds (mapv #(world-position bbox %) bone-plan)
-        bones (mapv (fn [i [_name parent _h _x _z]]
-                       (let [w (nth worlds i)
-                             local (if parent (skm/vec3- w (nth worlds (name->index parent))) w)]
-                         (sk/bone {:name (nth names i)
-                                   :parent (when parent (name->index parent))
-                                   :local-position local
-                                   :local-rotation skm/quat-identity
-                                   :local-scale skm/vec3-one})))
-                     (range (count bone-plan)) bone-plan)]
-    {:sk (sk/skeleton bones) :names names :name->index name->index}))
+  "bbox (+ optional bone `plan`, default `bone-plan`) -> `{:sk <skeleton.cljc
+  Skeleton> :names [wire-name ...] :name->index {...}}`. Bones carry identity
+  rotation/unit scale throughout -- this heuristic only ever places joints,
+  it never orients them -- which lets the inverse-bind-matrix step below skip
+  a general Mat4 inverse (see `inverse-bind-of`).
+
+  `plan` is parameterized (ADR-0048 §2) so callers can synthesize an
+  alternate-but-equally-plausible skeleton from the same bbox heuristic --
+  used by `kami.gen.ml3d`'s UniRig mock to produce a structurally different
+  rig (different bone count/set) than this module's own default plan,
+  without a second hand-rolled VRM assembler."
+  ([bbox] (build-skeleton bbox bone-plan))
+  ([bbox plan]
+   (let [names (mapv first plan)
+         name->index (into {} (map-indexed (fn [i n] [n i]) names))
+         worlds (mapv #(world-position bbox %) plan)
+         bones (mapv (fn [i [_name parent _h _x _z]]
+                        (let [w (nth worlds i)
+                              local (if parent (skm/vec3- w (nth worlds (name->index parent))) w)]
+                          (sk/bone {:name (nth names i)
+                                    :parent (when parent (name->index parent))
+                                    :local-position local
+                                    :local-rotation skm/quat-identity
+                                    :local-scale skm/vec3-one})))
+                      (range (count plan)) plan)]
+     {:sk (sk/skeleton bones) :names names :name->index name->index})))
 
 (defn bone-world-positions
   "World translations of every bone in `sk`'s rest pose -- via
@@ -217,8 +239,15 @@
 (defn auto-rig-glb
   "`mesh-path` (a plain, non-VRM GLB) -> VRM GLB bytes (byte-int vector),
   auto-rigged to a heuristic VRM humanoid skeleton. See namespace docstring
-  for what is and isn't validated here."
-  [mesh-path]
+  for what is and isn't validated here.
+
+  Optional 2-arity form takes a `plan` (same shape as `bone-plan`) -- ADR-0048
+  §2, used by `kami.gen.ml3d`'s UniRig mock to synthesize a structurally
+  different rig from the same mesh, so the ensemble comparison path has two
+  genuinely different skeletons to report on, not two calls into the same
+  code producing byte-identical output."
+  ([mesh-path] (auto-rig-glb mesh-path bone-plan))
+  ([mesh-path plan]
   (let [{:keys [gltf bin] :as doc} (read-glb-doc mesh-path)
         ni (mesh-node-index gltf)
         mesh-idx (get-in gltf [:nodes ni :mesh])
@@ -228,7 +257,7 @@
         vertices (mapv (fn [i] [(nth flat (* i 3)) (nth flat (+ (* i 3) 1)) (nth flat (+ (* i 3) 2))])
                        (range vcount))
         bbox (bounding-box doc)
-        {:keys [sk names name->index]} (build-skeleton bbox)
+        {:keys [sk names name->index]} (build-skeleton bbox plan)
         num-bones (count names)
         world-pos (bone-world-positions sk)
         base-node-count (count (:nodes gltf))
@@ -295,7 +324,7 @@
                          {:name "kami-gen-ml3d auto-rig (heuristic — NOT verified against real TRELLIS/Hunyuan3D-2 output, see README)"
                           :authors ["kotoba-lang/kami-gen-ml3d"]})
                   :humanoid (vt/vrm-humanoid human-bones)})]
-    (export/export-glb vrm-doc)))
+    (export/export-glb vrm-doc))))
 
 (defn write-vrm-file!
   "Write VRM GLB `bytes` (byte-int vector) to a fresh temp `.vrm` file,

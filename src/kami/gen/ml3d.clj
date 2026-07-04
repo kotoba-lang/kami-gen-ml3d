@@ -15,7 +15,22 @@
   correctly wired code that WILL fail loudly if you call it without a
   configured backend (`MURAKUMO_BACKEND_URL`/`COMFY_URL`/`KAMI_RENDER_URL`) --
   it has never been run against a live TRELLIS/Hunyuan3D-2 endpoint. See
-  README and ADR-2607051120."
+  README and ADR-2607051120.
+
+  ADR-0048 §2 second stage (UniRig, `:autorig` cloud-murakumo function):
+  `auto-rig-via-unirig` submits an already-downloaded mesh to the REAL
+  `:autorig` function (`:fn/engine :unirig`, `:gpu/class :l4`) the exact same
+  `cloud-murakumo.gen/job` + `cloud-murakumo.worker/run-job` + injected
+  `:execute` way `generate-from-image` already does for `:model3d`. This is
+  an ENSEMBLE/cross-check on top of `kami.gen.ml3d.rig/auto-rig-glb`'s own
+  bbox heuristic, NOT a replacement -- ADR-0048 §2 is explicit the heuristic
+  stays (2026 head-to-head auto-rig benchmarks found even best-in-class
+  riggers need human cleanup). `generate-from-image-with-rig-choice` runs
+  either or both and, when both, returns a simple `compare-rigs` report
+  (bone count + plausible-humanoid check) instead of silently trusting one.
+  Same fail-closed mock/real split as the `:model3d` stage: `mock-execute-
+  autorig`/`real-execute-autorig` -- no live UniRig backend exists in this
+  dev environment either, and this ADR does not authorize spending on one."
   (:require [cloud-murakumo.spec :as spec]
             [cloud-murakumo.gen :as gen]
             [cloud-murakumo.worker :as worker]
@@ -23,7 +38,9 @@
             [kami.gen.ml3d.rig :as rig]
             [kami.gen.ml3d.fixture :as fixture]
             [vrm :as vrm]
-            [clojure.java.io :as io]))
+            [clojure.java.io :as io]
+            [clojure.set :as set])
+  (:import [java.nio.file Files Paths]))
 
 (defn model3d-fn
   "The real `:model3d` `:gen` function declared in cloud-murakumo's
@@ -93,11 +110,146 @@
   "Wrap `execute` so we can retrieve its raw `{:outputs ...}` after
   `cloud-murakumo.worker/run-job` runs (that fn only returns CIDs, not the
   paths `cid-of` was computed from -- we need the actual mesh path for the
-  auto-rig step)."
+  auto-rig step). Generic over engine -- reused below for the `:autorig` job
+  too, not `:model3d`-specific despite the name it was first written under."
   [execute]
   (let [captured (atom nil)]
     [(fn [inv] (let [result (execute inv)] (reset! captured result) result))
      captured]))
+
+(defn- file->vrm-bytes
+  "A written VRM/GLB file path -> byte-int vector (`vrm.glb`'s convention,
+  each element 0-255), so a job's `:outputs` file path can be fed to
+  `vrm/parse-vrm` the same way `rig/auto-rig-glb`'s in-memory bytes already
+  are in `generate-from-image` -- `:autorig`'s `execute` returns a written
+  file (same `{:outputs [path...]}` shape `:model3d`'s does), not bytes."
+  [path]
+  (vec (map #(bit-and (int %) 0xFF) (Files/readAllBytes (Paths/get path (make-array String 0))))))
+
+;; ── ADR-0048 §2 -- second stage: UniRig via cloud-murakumo's :autorig ──────
+
+(defn autorig-fn
+  "The real `:autorig` `:gen` function declared in cloud-murakumo's
+  `resources/murakumo.edn` (`:fn/engine :unirig`, model `unirig`,
+  `:gpu/class :l4`, `:in [:glb :vrm]` `:out [:vrm]` -- ADR-0048 §2). Loaded
+  the same way as `model3d-fn`."
+  []
+  (or (first (filter #(= :autorig (:fn/id %)) (spec/functions (spec/load-spec))))
+      (throw (ex-info "cloud-murakumo :autorig gen function not found in murakumo.edn (upstream schema changed?)" {}))))
+
+(defn build-autorig-job
+  "`{:mesh-path :model :params}` + actor -> normalized `:gen.job` map against
+  the real `:autorig` function. `mesh-path` (a plain, non-VRM glb/vrm mesh --
+  e.g. the `:model3d`/TRELLIS output `generate-from-image` already downloads,
+  or this repo's own fixture) becomes the job's sole `:refs` entry;
+  `cloud-murakumo.engine/invocation`'s `:unirig` case reads it as the mesh to
+  rig."
+  [{:keys [mesh-path model params]} actor]
+  (gen/job (autorig-fn) {:model model :prompt nil :refs [mesh-path] :params params} actor))
+
+(defn mock-execute-autorig
+  "Mock `execute` for the `:autorig` (UniRig) job, for this repo's test suite
+  and dry-run demonstration. Ignores the invocation and runs this repo's OWN
+  bbox-heuristic auto-rig (`kami.gen.ml3d.rig/auto-rig-glb`) against a fresh
+  fixture mesh, but with `rig/unirig-mock-bone-plan` instead of `rig/bone-
+  plan` -- a deliberately different-but-plausible skeleton (adds `upperChest`,
+  20 bones vs 19), so `generate-from-image-with-rig-choice`'s `:both`
+  ensemble path has two genuinely different rigs to compare, not two calls
+  into the same code producing byte-identical output. **This is not a UniRig
+  result** -- no live UniRig backend exists in this dev environment, see
+  README/ADR-0048 §2."
+  [_inv]
+  (let [mesh-path (fixture/write-glb-file!)
+        vrm-bytes (rig/auto-rig-glb mesh-path rig/unirig-mock-bone-plan)
+        vrm-path (rig/write-vrm-file! vrm-bytes)]
+    {:outputs [vrm-path] :gpu-seconds 3}))
+
+(defn real-execute-autorig
+  "Real `execute` for the `:autorig` (UniRig) job: same fail-closed wrapper
+  pattern as `real-execute` (`:model3d`/TRELLIS), for the `:unirig` engine
+  and its `:gpu/class :l4` billing instead. Genuinely the same
+  `cloud-murakumo.worker/default-execute` code path; not reimplemented.
+  **Never actually invoked against a live backend in this repo** -- there
+  isn't one in this dev environment (ADR-0048 §2, same real-money caveat as
+  ADR-2607051120)."
+  [inv]
+  (when-not (or (worker/getenv "MURAKUMO_BACKEND_URL")
+                (worker/getenv "COMFY_URL")
+                (worker/getenv "KAMI_RENDER_URL"))
+    (throw (ex-info (str "kami.gen.ml3d/real-execute-autorig: no live cloud-murakumo backend configured "
+                         "(MURAKUMO_BACKEND_URL / COMFY_URL / KAMI_RENDER_URL all unset) -- "
+                         "refusing to fabricate a result. Configure a real unirig-cuda backend "
+                         "(fleet operator action, incurs real :gpu/class :l4 billing) or use "
+                         "mock-execute-autorig for tests/dry-runs. See ADR-0048 §2.")
+                    {:via (:via inv) :runtime (get-in inv [:backend :runtime])})))
+  (worker/default-execute inv))
+
+(defn auto-rig-via-unirig
+  "`{:mesh-path :model :params :actor}` + `{:execute :cid-of :run-id}` ->
+  `{:gen.job :run :vrm {:path :document}}`. Submits `mesh-path` to the REAL
+  `:autorig` cloud-murakumo function (ADR-0048 §2), the exact same
+  `cloud-murakumo.gen/job` + `cloud-murakumo.worker/run-job` + injected
+  `:execute` pattern `generate-from-image` already uses for `:model3d` --
+  not a second reimplementation of job submission/execution. `:execute` is
+  REQUIRED (`mock-execute-autorig` or `real-execute-autorig`) -- no silent
+  default, same fail-closed convention as `generate-from-image`."
+  [{:keys [mesh-path model params actor]
+    :or {actor {:account "kami-gen-ml3d/dev"} params {}}}
+   {:keys [execute cid-of run-id]
+    :or {cid-of executor/content-cid
+         run-id (fn [] (str "run-" (random-uuid)))}}]
+  (when-not execute
+    (throw (ex-info "auto-rig-via-unirig requires :execute (kami.gen.ml3d/mock-execute-autorig or /real-execute-autorig)" {})))
+  (let [job (build-autorig-job {:mesh-path mesh-path :model model :params params} actor)
+        [wrapped-execute captured] (capturing-execute execute)
+        done (worker/run-job job {:execute wrapped-execute :cid-of cid-of :run-id run-id})]
+    (when (= :failed (:gen.job/status done))
+      (throw (ex-info "kami-gen-ml3d: autorig (:unirig) job failed" {:job done})))
+    (let [vrm-path (first (:outputs @captured))
+          vrm-bytes (file->vrm-bytes vrm-path)
+          vrm-document (vrm/parse-vrm vrm-bytes)]
+      {:gen.job job
+       :run (:gen.job/run done)
+       :vrm {:path vrm-path :document vrm-document}})))
+
+;; ── ADR-0048 §2 -- ensemble comparison (simple, not a scoring system) ──────
+
+(def required-human-bones
+  "VRM 1.0's mandatory human bones (spec `Table. Human Bone` `requirement:
+  Required`, 15 total) -- the minimum any plausible humanoid rig must carry.
+  Used only for a coarse `plausible-humanoid?` sanity check, not validation
+  of the whole `humanBones` mapping."
+  #{:hips :spine :head
+    :left-upper-arm :left-lower-arm :left-hand
+    :right-upper-arm :right-lower-arm :right-hand
+    :left-upper-leg :left-lower-leg :left-foot
+    :right-upper-leg :right-lower-leg :right-foot})
+
+(defn rig-summary
+  "A VRM document (`vrm/parse-vrm`'s result) -> a small, honest summary for
+  `compare-rigs`: bone count + whether the joint names look like a plausible
+  humanoid (all of VRM 1.0's 15 REQUIRED human bones present). Deliberately
+  NOT a scoring/quality system -- ADR-0048 §2 asks for something simple a
+  caller can read, not an automated verdict."
+  [vrm-document]
+  (let [bones (set (map :bone (get-in vrm-document [:humanoid :human-bones])))
+        missing (set/difference required-human-bones bones)]
+    {:bone-count (count bones)
+     :bones bones
+     :plausible-humanoid? (empty? missing)
+     :missing-required-bones missing}))
+
+(defn compare-rigs
+  "Two `rig-summary` maps (`:heuristic`/`:unirig`) -> a simple comparison a
+  caller can read to pick one over the other, or notice they disagree enough
+  to warrant a human look -- not an automated scoring system (ADR-0048 §2)."
+  [heuristic-summary unirig-summary]
+  {:heuristic heuristic-summary
+   :unirig unirig-summary
+   :bone-count-diff (- (:bone-count unirig-summary) (:bone-count heuristic-summary))
+   :agree-on-bone-count? (= (:bone-count heuristic-summary) (:bone-count unirig-summary))
+   :both-plausible-humanoid? (and (:plausible-humanoid? heuristic-summary)
+                                  (:plausible-humanoid? unirig-summary))})
 
 ;; ── Asset Hub publish shape (network-isekai public/assets/index.edn) ──────
 
@@ -156,3 +308,73 @@
        :mesh-path mesh-path
        :vrm {:path vrm-path :document vrm-document}
        :asset asset})))
+
+(defn generate-from-image-with-rig-choice
+  "Like `generate-from-image`, but the rig stage is a choice instead of
+  hardcoding `kami.gen.ml3d.rig/auto-rig-glb` -- ADR-0048 §2's ensemble/
+  fallback decision: UniRig (`:autorig`) is added ALONGSIDE the existing
+  bbox-heuristic, never in place of it.
+
+  `request` gains `:rig-strategy` (`:heuristic` (default -- byte-for-byte
+  the same rig stage `generate-from-image` runs) | `:unirig` | `:both`) and
+  `:rig-model` (an `:autorig` model id -- separate from `:model3d`'s own
+  `:model`, since `:autorig`'s model menu (`unirig`) has nothing to do with
+  `:model3d`'s (`trellis`/`hunyuan3d-2.1`); nil -> `:autorig`'s default, same
+  nil-means-default contract as `cloud-murakumo.gen/resolve-model`).
+  `opts` gains `:rig-execute` (required when `:rig-strategy` is `:unirig` or
+  `:both` -- `mock-execute-autorig`/`real-execute-autorig`) alongside
+  `generate-from-image`'s own `:execute`/`:cid-of`/`:run-id`.
+
+  Returns `generate-from-image`'s shape (`:gen.job :run :mesh-path :asset`)
+  plus `:vrm` (the PRIMARY result -- heuristic's, unless only `:unirig` was
+  requested), and:
+    `:heuristic` `{:path :document}` when the heuristic ran
+    `:unirig` `{:path :document}` (+ `:unirig-run`/`:unirig-job`) when UniRig ran
+    `:comparison` (`compare-rigs`'s report) only when `:rig-strategy :both` --
+      a caller decides which to keep; this fn does not silently pick a
+      'winner' (2026 head-to-head auto-rig benchmarks found even best-in-
+      class riggers need human cleanup, ADR-0048 §2 -- there is no
+      universally-correct automatic choice here)."
+  [{:keys [image-path model prompt params actor rig-strategy rig-model]
+    :or {actor {:account "kami-gen-ml3d/dev"} params {} rig-strategy :heuristic}}
+   {:keys [execute cid-of run-id rig-execute]
+    :or {cid-of executor/content-cid
+         run-id (fn [] (str "run-" (random-uuid)))}}]
+  (when-not execute
+    (throw (ex-info "generate-from-image-with-rig-choice requires :execute (kami.gen.ml3d/mock-execute or /real-execute)" {})))
+  (when (and (#{:unirig :both} rig-strategy) (not rig-execute))
+    (throw (ex-info "generate-from-image-with-rig-choice requires :rig-execute when :rig-strategy is :unirig or :both (kami.gen.ml3d/mock-execute-autorig or /real-execute-autorig)"
+                    {:rig-strategy rig-strategy})))
+  (let [refs (vec (remove nil? [image-path]))
+        job (build-job {:model model :prompt prompt :refs refs :params params} actor)
+        [wrapped-execute captured] (capturing-execute execute)
+        done (worker/run-job job {:execute wrapped-execute :cid-of cid-of :run-id run-id})]
+    (when (= :failed (:gen.job/status done))
+      (throw (ex-info "kami-gen-ml3d: generation job failed" {:job done})))
+    (let [mesh-path (first (:outputs @captured))
+          heuristic-result (when (#{:heuristic :both} rig-strategy)
+                             (let [vrm-bytes (rig/auto-rig-glb mesh-path)
+                                   vrm-path (rig/write-vrm-file! vrm-bytes)]
+                               {:path vrm-path :document (vrm/parse-vrm vrm-bytes)}))
+          unirig-run (when (#{:unirig :both} rig-strategy)
+                      ;; :rig-model, NOT :model3d's own `model` -- :autorig has
+                      ;; its own model menu (`unirig`), unrelated to :model3d's
+                      ;; (`trellis`/`hunyuan3d-2.1`). nil -> :autorig's default,
+                      ;; same nil-means-default contract as cloud-murakumo.gen/
+                      ;; resolve-model itself.
+                      (auto-rig-via-unirig {:mesh-path mesh-path :model rig-model :params params :actor actor}
+                                           {:execute rig-execute :cid-of cid-of :run-id run-id}))
+          primary (or heuristic-result (:vrm unirig-run))
+          asset (->asset done (:path primary))]
+      (cond-> {:gen.job job
+               :run (:gen.job/run done)
+               :mesh-path mesh-path
+               :vrm primary
+               :asset asset}
+        heuristic-result (assoc :heuristic heuristic-result)
+        unirig-run (assoc :unirig (:vrm unirig-run)
+                          :unirig-run (:run unirig-run)
+                          :unirig-job (:gen.job unirig-run))
+        (= :both rig-strategy) (assoc :comparison
+                                      (compare-rigs (rig-summary (:document heuristic-result))
+                                                    (rig-summary (:document (:vrm unirig-run)))))))))
