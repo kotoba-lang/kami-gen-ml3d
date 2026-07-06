@@ -12,7 +12,7 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
         io.github.gftdcojp/cloud-murakumo {:local/root "../../gftdcojp/cloud-murakumo"}
-        io.github.kotoba-lang/vrm         {:local/root "../vrm"}
+        io.github.kotoba-lang/org-vrmc-vrm {:local/root "../org-vrmc-vrm"}
         io.github.kotoba-lang/skeleton    {:local/root "../skeleton"}}
  :aliases
  {:test {:extra-paths ["test"]
