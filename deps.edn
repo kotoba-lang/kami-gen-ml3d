@@ -12,10 +12,14 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
         io.github.gftdcojp/cloud-murakumo {:local/root "../../gftdcojp/cloud-murakumo"}
-        io.github.kotoba-lang/vrm         {:local/root "../vrm"}
+        io.github.kotoba-lang/org-vrmc-vrm {:local/root "../org-vrmc-vrm"}
         io.github.kotoba-lang/skeleton    {:local/root "../skeleton"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps  {io.github.cognitect-labs/test-runner
                        {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
-         :main-opts   ["-m" "cognitect.test-runner"]}}}
+         :main-opts   ["-m" "cognitect.test-runner"]}
+  ;; clj-kondo as a Clojars lib (no Homebrew/system install needed).
+  :lint {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2024.11.14"}}
+         :main-opts ["-m" "clj-kondo.main" "--lint" "src" "test"
+                     "--fail-level" "error"]}}}
