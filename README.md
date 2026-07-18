@@ -217,3 +217,16 @@ clojure -M:test
 
 19 tests / 94 assertions, all against `mock-execute`/`mock-execute-autorig` —
 no network, no GPU, no cost.
+# Murakumo postprocessor
+
+The bounded heuristic GLB-to-VRM converter is available as a process boundary
+for the Hunyuan3D generation service:
+
+```sh
+scripts/kami-heuristic-vrm-postprocess --input model.glb --output model.vrm
+```
+
+It re-parses the emitted VRM and requires at least the VRM 1.0 mandatory
+humanoid mapping before returning success. This proves structural validity,
+not animation quality on arbitrary generated meshes; production remains gated
+on a real Hunyuan3D artifact visual/rig evaluation and UniRig comparison.

@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+VRM_ROOT=${KOTOBA_VRM_ROOT:-"$ROOT/../org-vrmc-vrm"}
+SKELETON_ROOT=${KOTOBA_SKELETON_ROOT:-"$ROOT/../skeleton"}
+
+# Run outside the project so the production postprocessor loads only the
+# exporter dependencies. The full kami-gen-ml3d project also integrates the
+# cloud scheduler, which is intentionally not part of this GPU-host step.
+cd /tmp
+exec clojure -Sdeps "{:paths [\"$ROOT/src\"]
+                      :deps {org.clojure/clojure {:mvn/version \"1.12.0\"}
+                             io.github.kotoba-lang/org-vrmc-vrm {:local/root \"$VRM_ROOT\"}
+                             io.github.kotoba-lang/skeleton {:local/root \"$SKELETON_ROOT\"}}}" \
+  -M -m kami.gen.ml3d.rig "$@"

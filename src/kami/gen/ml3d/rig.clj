@@ -31,12 +31,14 @@
   writer `compose`'s own output goes through, just without driving it through
   `compose`'s part-merge machinery, which doesn't fit this shape of problem."
   (:require [skeleton :as sk]
+            [clojure.string :as str]
             [skeleton.math :as skm]
             [vrm.vrm-types :as vt]
             [vrm.gltf-types :as gt]
             [vrm.glb :as glb]
             [vrm.json :as json]
             [vrm.convert :as convert]
+            [vrm.parse :as parse]
             [vrm.export :as export])
   (:import [java.nio ByteBuffer ByteOrder]
            [java.nio.file Files Paths]))
@@ -334,3 +336,35 @@
                                     (make-array java.nio.file.attribute.FileAttribute 0))]
     (Files/write path (byte-array (map unchecked-byte bytes)) (make-array java.nio.file.OpenOption 0))
     (str path)))
+
+(defn- cli-opts [args]
+  (loop [xs args out {}]
+    (if (empty? xs)
+      out
+      (let [[flag value & more] xs]
+        (when-not (and (str/starts-with? (str flag) "--") value)
+          (throw (ex-info "usage: --input mesh.glb --output avatar.vrm [--image ref] [--asset-dir dir]" {})))
+        (recur more (assoc out (keyword (subs flag 2)) value))))))
+
+(defn convert-file!
+  "Convert one raw humanoid-shaped GLB with the documented bbox heuristic,
+   then parse the emitted bytes again so a malformed/non-VRM output never
+   crosses the process boundary. Returns the output path."
+  [input output]
+  (when (or (str/blank? input) (str/blank? output))
+    (throw (ex-info "--input and --output are required" {})))
+  (let [bytes (auto-rig-glb input)
+        parsed (parse/parse-vrm bytes)]
+    (when (< (count (get-in parsed [:humanoid :human-bones])) 15)
+      (throw (ex-info "generated VRM lacks required humanoid mapping" {})))
+    (Files/write (Paths/get output (make-array String 0))
+                 (byte-array (map unchecked-byte bytes))
+                 (into-array java.nio.file.StandardOpenOption
+                             [java.nio.file.StandardOpenOption/CREATE
+                              java.nio.file.StandardOpenOption/TRUNCATE_EXISTING
+                              java.nio.file.StandardOpenOption/WRITE]))
+    output))
+
+(defn -main [& args]
+  (let [{:keys [input output]} (cli-opts args)]
+    (println (convert-file! input output))))
