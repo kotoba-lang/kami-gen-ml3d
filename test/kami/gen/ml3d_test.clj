@@ -6,7 +6,19 @@
             [kami.gen.ml3d.rig :as rig]
             [kami.gen.ml3d.fixture :as fixture]
             [vrm :as vrm]
-            [vrm.glb :as glb]))
+            [vrm.glb :as glb])
+  (:import [java.nio.file Files]
+           [java.nio.file.attribute FileAttribute]))
+
+(deftest postprocessor-converts-raw-glb-to-parseable-vrm
+  (let [input (fixture/write-glb-file!)
+        output (str (Files/createTempFile "kami-postprocess-" ".vrm"
+                                          (make-array FileAttribute 0)))]
+    (is (= output (rig/convert-file! input output)))
+    (let [bytes (vec (map #(bit-and (int %) 255) (Files/readAllBytes (java.nio.file.Paths/get output (make-array String 0)))))
+          document (vrm/parse-vrm bytes)]
+      (is (= :v1-0 (:version document)))
+      (is (>= (count (get-in document [:humanoid :human-bones])) 15)))))
 
 (deftest model3d-fn-matches-cloud-murakumo-spec
   (testing "the real :model3d function from cloud-murakumo's murakumo.edn, not a copy"
