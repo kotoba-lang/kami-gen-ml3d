@@ -31,7 +31,7 @@
   writer `compose`'s own output goes through, just without driving it through
   `compose`'s part-merge machinery, which doesn't fit this shape of problem."
   (:require [skeleton :as sk]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [skeleton.math :as skm]
             [vrm.vrm-types :as vt]
             [vrm.gltf-types :as gt]
