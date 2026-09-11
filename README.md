@@ -223,7 +223,7 @@ The bounded heuristic GLB-to-VRM converter is available as a process boundary
 for the Hunyuan3D generation service:
 
 ```sh
-nbb scripts/kami-heuristic-vrm-postprocess.cljs --input model.glb --output model.vrm
+nbb scripts/kami-heuristic-vrm-postprocess.cljk --input model.glb --output model.vrm
 ```
 
 It re-parses the emitted VRM and requires at least the VRM 1.0 mandatory
