@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; nbb port of the former POSIX-sh launcher (no new .sh — ADR-2607173000).
 ;;
 ;; Runs the production VRM postprocessor from outside the project directory so
