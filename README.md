@@ -47,7 +47,7 @@ This was checked to be clean before committing to it: `cloud-murakumo`'s
 `deps.edn` `:deps` (the part that lands on every consumer's classpath) is
 just `org.clojure/clojure` + `org.clojure/data.json` — the `shadow-cljs`/cljs
 UI-substrate dependency lives behind its own `:cljs` alias, which we never
-activate. `clojure -Spath` in this repo confirms `cloud-murakumo`'s `src` AND
+activate. `kbb -Spath` in this repo confirms `cloud-murakumo`'s `src` AND
 `resources` paths (so `(io/resource "murakumo.edn")` resolves) land on our
 classpath transitively through the `:local/root` dep, with no cljs leakage.
 Given that, depending directly and reading the live function map off
@@ -212,7 +212,7 @@ repos', and shapes the result per `gftdcojp/network-isekai`'s
 ## Develop
 
 ```sh
-clojure -M:test
+kbb -M:test
 ```
 
 19 tests / 94 assertions, all against `mock-execute`/`mock-execute-autorig` —
@@ -223,7 +223,7 @@ The bounded heuristic GLB-to-VRM converter is available as a process boundary
 for the Hunyuan3D generation service:
 
 ```sh
-nbb scripts/kami-heuristic-vrm-postprocess.cljk --input model.glb --output model.vrm
+kbb --backend sci scripts/kami-heuristic-vrm-postprocess.cljk --input model.glb --output model.vrm
 ```
 
 It re-parses the emitted VRM and requires at least the VRM 1.0 mandatory
