@@ -1,21 +1,18 @@
 (ns kami.gen.ml3d-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
             [clojure.java.io :as io]
             [cloud-murakumo.worker :as worker]
             [kami.gen.ml3d :as ml3d]
             [kami.gen.ml3d.rig :as rig]
             [kami.gen.ml3d.fixture :as fixture]
             [vrm :as vrm]
-            [vrm.glb :as glb])
-  (:import [java.nio.file Files]
-           [java.nio.file.attribute FileAttribute]))
+            [vrm.glb :as glb]))
 
 (deftest postprocessor-converts-raw-glb-to-parseable-vrm
   (let [input (fixture/write-glb-file!)
-        output (str (Files/createTempFile "kami-postprocess-" ".vrm"
-                                          (make-array FileAttribute 0)))]
+        output (str (kio/temp-file "kami-postprocess-" ".vrm"))]
     (is (= output (rig/convert-file! input output)))
-    (let [bytes (vec (map #(bit-and (int %) 255) (Files/readAllBytes (java.nio.file.Paths/get output (make-array String 0)))))
+    (let [bytes (vec (map #(bit-and (int %) 255) (kio/read-all-bytes output)))
           document (vrm/parse-vrm bytes)]
       (is (= :v1-0 (:version document)))
       (is (>= (count (get-in document [:humanoid :human-bones])) 15)))))
