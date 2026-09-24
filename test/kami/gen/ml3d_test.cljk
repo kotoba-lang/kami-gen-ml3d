@@ -1,5 +1,5 @@
 (ns kami.gen.ml3d-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [clojure.java.io :as io]
             [cloud-murakumo.worker :as worker]
             [kami.gen.ml3d :as ml3d]
