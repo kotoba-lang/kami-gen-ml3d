@@ -38,9 +38,8 @@
             [kami.gen.ml3d.rig :as rig]
             [kami.gen.ml3d.fixture :as fixture]
             [vrm :as vrm]
-            [clojure.java.io :as io]
-            [clojure.set :as set])
-  (:import [java.nio.file Files Paths]))
+            [kotoba.io :as io]
+            [kotoba.lang.coll :as set]))
 
 (defn model3d-fn
   "The real `:model3d` `:gen` function declared in cloud-murakumo's
@@ -124,7 +123,7 @@
   are in `generate-from-image` -- `:autorig`'s `execute` returns a written
   file (same `{:outputs [path...]}` shape `:model3d`'s does), not bytes."
   [path]
-  (vec (map #(bit-and (int %) 0xFF) (Files/readAllBytes (Paths/get path (make-array String 0))))))
+  (vec (map #(bit-and (int %) 0xFF) (io/read-all-bytes path))))
 
 ;; ── ADR-0048 §2 -- second stage: UniRig via cloud-murakumo's :autorig ──────
 
@@ -261,7 +260,7 @@
   [done vrm-path]
   (let [cid (executor/content-cid vrm-path)
         model (:gen.job/model done)
-        bytes-len (.length (io/file vrm-path))]
+        bytes-len (io/length (io/file vrm-path))]
     {:asset/id (str "kami-gen-ml3d-" (get-in done [:gen.job/run :murakumo.run/id]))
      :asset/kind :model3d
      :asset/format :vrm

@@ -12,10 +12,9 @@
   data from scratch (`kami.gen.ml3d.rig` needs the same primitives to attach
   a synthesized skeleton + skin, so the helpers here are deliberately small
   and mirrored there)."
-  (:require [vrm.glb :as glb]
+  (:require [kotoba.io :as kio] [vrm.glb :as glb]
             [vrm.json :as json])
-  (:import [java.nio ByteBuffer ByteOrder]
-           [java.nio.file Files]))
+  (:import [java.nio ByteBuffer ByteOrder]))
 
 (defn- bytes->byte-ints [^bytes bs] (vec (map #(bit-and (int %) 0xFF) bs)))
 
@@ -80,7 +79,6 @@
   "Write a fresh fixture GLB to a temp file, returning its path."
   []
   (let [bs (glb-bytes)
-        path (Files/createTempFile "kami-gen-ml3d-fixture-" ".glb"
-                                    (make-array java.nio.file.attribute.FileAttribute 0))]
-    (Files/write path (byte-array (map unchecked-byte bs)) (make-array java.nio.file.OpenOption 0))
+        path (kio/temp-file "kami-gen-ml3d-fixture-" ".glb")]
+    (kio/write-bytes path (byte-array (map unchecked-byte bs)))
     (str path)))

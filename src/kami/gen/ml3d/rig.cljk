@@ -30,7 +30,7 @@
   `vrm.gltf-types`) and calls `vrm.export/export-glb` on it -- the same GLB
   writer `compose`'s own output goes through, just without driving it through
   `compose`'s part-merge machinery, which doesn't fit this shape of problem."
-  (:require [skeleton :as sk]
+  (:require [kotoba.io :as kio] [skeleton :as sk]
             [kotoba.lang.text :as str]
             [skeleton.math :as skm]
             [vrm.vrm-types :as vt]
@@ -40,8 +40,7 @@
             [vrm.convert :as convert]
             [vrm.parse :as parse]
             [vrm.export :as export])
-  (:import [java.nio ByteBuffer ByteOrder]
-           [java.nio.file Files Paths]))
+  (:import [java.nio ByteBuffer ByteOrder]))
 
 ;; ── byte helpers (mirrors kami.gen.ml3d.fixture's; both need to WRITE raw
 ;;    little-endian glTF binary data, `vrm.convert` only READS it) ──────────
@@ -67,7 +66,7 @@
 
 (defn read-glb-doc
   [path]
-  (let [raw (bytes->byte-ints (Files/readAllBytes (Paths/get path (make-array String 0))))
+  (let [raw (bytes->byte-ints (kio/read-all-bytes path))
         chunks (glb/parse-glb raw)
         gltf (gt/gltf-document (json/parse (glb/byte-seq->string (:json chunks))))
         bin (vec (or (:bin chunks) []))]
@@ -332,9 +331,8 @@
   "Write VRM GLB `bytes` (byte-int vector) to a fresh temp `.vrm` file,
   returning its path."
   [bytes]
-  (let [path (Files/createTempFile "kami-gen-ml3d-" ".vrm"
-                                    (make-array java.nio.file.attribute.FileAttribute 0))]
-    (Files/write path (byte-array (map unchecked-byte bytes)) (make-array java.nio.file.OpenOption 0))
+  (let [path (kio/temp-file "kami-gen-ml3d-" ".vrm")]
+    (kio/write-bytes path (byte-array (map unchecked-byte bytes)))
     (str path)))
 
 (defn- cli-opts [args]
@@ -357,12 +355,9 @@
         parsed (parse/parse-vrm bytes)]
     (when (< (count (get-in parsed [:humanoid :human-bones])) 15)
       (throw (ex-info "generated VRM lacks required humanoid mapping" {})))
-    (Files/write (Paths/get output (make-array String 0))
+    (kio/write-bytes output
                  (byte-array (map unchecked-byte bytes))
-                 (into-array java.nio.file.StandardOpenOption
-                             [java.nio.file.StandardOpenOption/CREATE
-                              java.nio.file.StandardOpenOption/TRUNCATE_EXISTING
-                              java.nio.file.StandardOpenOption/WRITE]))
+                 [:create :truncate-existing :write])
     output))
 
 (defn -main [& args]
