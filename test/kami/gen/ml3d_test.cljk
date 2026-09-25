@@ -1,6 +1,6 @@
 (ns kami.gen.ml3d-test
-  (:require [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
-            [clojure.java.io :as io]
+  (:require [kotoba.lang.error :as kerror] [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
+            [kotoba.io :as io]
             [cloud-murakumo.worker :as worker]
             [kami.gen.ml3d :as ml3d]
             [kami.gen.ml3d.rig :as rig]
@@ -41,13 +41,13 @@
 
 (deftest build-job-rejects-unknown-model
   (testing "unsupported model throws -- no silent fallback (cloud-murakumo.gen/resolve-model contract)"
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (ml3d/build-job {:model "dall-e" :refs ["/tmp/ref.png"]} {:account "test"})))))
 
 (deftest mock-execute-returns-fixture-glb
   (let [{:keys [outputs gpu-seconds]} (ml3d/mock-execute {:via :proc :backend {:runtime "TRELLIS"}})]
     (is (= 1 (count outputs)))
-    (is (.exists (io/file (first outputs))))
+    (is (io/exists? (io/file (first outputs))))
     (is (pos? gpu-seconds))
     ;; structurally valid GLB (parses without throwing)
     (let [raw (vec (map #(bit-and (int %) 0xFF) (.readAllBytes (io/input-stream (first outputs)))))]
@@ -56,7 +56,7 @@
 (deftest real-execute-fails-closed-without-backend
   (testing "matches cloud-murakumo's own default-execute fail-closed contract, through this wrapper"
     (with-redefs [worker/getenv (fn [_] nil)]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+      (is (thrown-with-msg? kerror/ExceptionInfo
                             #"no live cloud-murakumo backend configured"
                             (ml3d/real-execute {:via :proc :backend {:runtime "TRELLIS"}}))))))
 
@@ -106,9 +106,9 @@
         (is (= 7 (:murakumo.run/gpu-seconds (:run result))))
         (is (= :3d (:murakumo.run/modality (:run result)))))
       (testing ":mesh-path is a real downloaded (fixture) file"
-        (is (.exists (io/file (:mesh-path result)))))
+        (is (io/exists? (io/file (:mesh-path result)))))
       (testing ":vrm is a real, parseable VRM document"
-        (is (.exists (io/file (get-in result [:vrm :path]))))
+        (is (io/exists? (io/file (get-in result [:vrm :path]))))
         (is (= 19 (count (:human-bones (:humanoid (get-in result [:vrm :document])))))))
       (testing ":asset matches the network-isekai Asset Hub :asset/* schema"
         (let [asset (:asset result)]
@@ -120,7 +120,7 @@
           (is (contains? (set (:asset/deps asset)) "gftdcojp/cloud-murakumo")))))))
 
 (deftest generate-from-image-requires-execute
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires :execute"
+  (is (thrown-with-msg? kerror/ExceptionInfo #"requires :execute"
                         (ml3d/generate-from-image {:image-path "/tmp/x.png"} {}))))
 
 ;; ── ADR-0048 §2 -- UniRig (:autorig) ensemble/fallback ─────────────────────
@@ -149,7 +149,7 @@
 (deftest mock-execute-autorig-returns-a-fixture-vrm
   (let [{:keys [outputs gpu-seconds]} (ml3d/mock-execute-autorig {:via :proc :backend {:runtime "UniRig"}})]
     (is (= 1 (count outputs)))
-    (is (.exists (io/file (first outputs))))
+    (is (io/exists? (io/file (first outputs))))
     (is (pos? gpu-seconds))
     (testing "it's a real, valid VRM 1.0 file, structurally different from the heuristic's own default rig"
       (let [raw (vec (map #(bit-and (int %) 0xFF) (.readAllBytes (io/input-stream (first outputs)))))
@@ -161,7 +161,7 @@
 (deftest real-execute-autorig-fails-closed-without-backend
   (testing "matches cloud-murakumo's own default-execute fail-closed contract, through this wrapper"
     (with-redefs [worker/getenv (fn [_] nil)]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+      (is (thrown-with-msg? kerror/ExceptionInfo
                             #"no live cloud-murakumo backend configured"
                             (ml3d/real-execute-autorig {:via :proc :backend {:runtime "UniRig"}}))))))
 
@@ -173,7 +173,7 @@
       (is (= :unirig (get-in result [:gen.job :gen.job/engine])))
       (is (= "unirig" (get-in result [:gen.job :gen.job/model])))
       (is (= :done (:murakumo.run/state (:run result))))
-      (is (.exists (io/file (get-in result [:vrm :path]))))
+      (is (io/exists? (io/file (get-in result [:vrm :path]))))
       (is (= 20 (count (:human-bones (:humanoid (get-in result [:vrm :document])))))))))
 
 (deftest generate-from-image-with-rig-choice-defaults-to-heuristic-only
@@ -197,7 +197,7 @@
     (is (= 20 (count (:human-bones (:humanoid (:document (:vrm result)))))))))
 
 (deftest generate-from-image-with-rig-choice-requires-rig-execute-for-unirig
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"requires :rig-execute"
+  (is (thrown-with-msg? kerror/ExceptionInfo #"requires :rig-execute"
                         (ml3d/generate-from-image-with-rig-choice
                          {:image-path "/tmp/x.png" :rig-strategy :unirig}
                          {:execute ml3d/mock-execute}))))
@@ -210,8 +210,8 @@
       (testing "both riggers actually ran"
         (is (contains? result :heuristic))
         (is (contains? result :unirig))
-        (is (.exists (io/file (get-in result [:heuristic :path]))))
-        (is (.exists (io/file (get-in result [:unirig :path]))))
+        (is (io/exists? (io/file (get-in result [:heuristic :path]))))
+        (is (io/exists? (io/file (get-in result [:unirig :path]))))
         (is (= 19 (count (:human-bones (:humanoid (:document (:heuristic result)))))))
         (is (= 20 (count (:human-bones (:humanoid (:document (:unirig result))))))))
       (testing "primary :vrm defaults to the heuristic's result, not silently swapped for UniRig's"
