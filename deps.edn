@@ -3,7 +3,7 @@
 ;; `cloud_murakumo.executor` (`.clj`, not `.cljc`).
 ;;
 ;; :local/root deps (not Maven coords) — same convention as this org's actor
-;; repos (CLAUDE.md "Actors" section: langgraph-clj override). tools.deps
+;; repos (AGENTS.md "Actors" section: langgraph-clj override). tools.deps
 ;; pulls each dependency's own `:paths` onto our classpath, so
 ;; `cloud-murakumo.spec/load-spec` resolves `resources/murakumo.edn` as a
 ;; classpath resource transitively through the cloud-murakumo dependency —
